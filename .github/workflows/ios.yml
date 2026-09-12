@@ -300,7 +300,7 @@ jobs:
                 project: "AgendaLogo.xcodeproj",
                 scheme: "AgendaLogo",
                 export_method: "app-store",
-                xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_STYLE=Manual",
+                xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_STYLE=Manual \"PROVISIONING_PROFILE_SPECIFIER=match AppStore #{BUNDLE_ID}\" \"CODE_SIGN_IDENTITY=Apple Distribution\"",
                 export_options: {
                   provisioningProfiles: {
                     BUNDLE_ID => "match AppStore #{BUNDLE_ID}"
