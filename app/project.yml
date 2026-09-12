@@ -1,0 +1,43 @@
+name: AgendaLogo
+options:
+  bundleIdPrefix: com.agendalogo
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_LANGUAGE: pt-BR
+targets:
+  AgendaLogo:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: AgendaLogo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agendalogo.app
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: AgendaLogo/Info.plist
+      properties:
+        CFBundleDisplayName: Agenda Logo
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+schemes:
+  AgendaLogo:
+    build:
+      targets:
+        AgendaLogo: all
+    run:
+      config: Debug
+    archive:
+      config: Release
