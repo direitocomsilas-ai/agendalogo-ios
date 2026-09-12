@@ -296,8 +296,11 @@ jobs:
                 shallow_clone: false
               )
 
-              sh("security", "unlock-keychain", "-p", ENV["MATCH_PASSWORD"]) || true
-              sh("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", ENV["MATCH_PASSWORD"]) || true
+              pw = ENV["MATCH_PASSWORD"].to_s
+              kc = `security list-keychains -d user`.split("\n").first.to_s.strip.delete('"')
+              `security unlock-keychain -p "#{pw}" "#{kc}" 2>/dev/null || true`
+              `security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "#{pw}" "#{kc}" 2>/dev/null || true`
+              UI.important("Keychain preparado: #{kc}")
 
               build_app(
                 project: "AgendaLogo.xcodeproj",
