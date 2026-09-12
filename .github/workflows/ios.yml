@@ -316,7 +316,7 @@ jobs:
 
               upload_to_testflight(
                 api_key: api_key,
-                ipa: lane_context[SharedValues::XCODEBUILD_IPA_PATH],
+                ipa: lane_context[SharedValues::IPA_OUTPUT_PATH],
                 skip_waiting_for_build_processing: true
               )
 
