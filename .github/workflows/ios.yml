@@ -282,8 +282,8 @@ jobs:
                   skip_itc: false
                 )
               rescue => e
-                UI.warning("produce: #{e.message}")
-                UI.warning("Se o app ja existe na App Store Connect, pode ignorar este aviso.")
+                UI.important("produce: #{e.message}")
+                UI.important("Se o app ja existe na App Store Connect, pode ignorar este aviso.")
               end
 
               sh("xcodegen", "generate")
