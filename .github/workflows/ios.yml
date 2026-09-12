@@ -1,0 +1,349 @@
+name: "iOS - Build e TestFlight"
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Criar arquivos, compilar e enviar ao TestFlight
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_P8: ${{ secrets.APPSTORE_P8 }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_URL: "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+      CI: "true"
+    steps:
+      - name: Baixar o repositorio
+        uses: actions/checkout@v4
+
+      - name: Criar a estrutura completa do app
+        run: |
+          mkdir -p app/AgendaLogo/Assets.xcassets/AppIcon.appiconset app/fastlane
+          cat > app/project.yml <<'FIMPROJ'
+          name: AgendaLogo
+          options:
+            bundleIdPrefix: com.agendalogo
+            createIntermediateGroups: true
+          settings:
+            base:
+              MARKETING_VERSION: "1.0.0"
+              CURRENT_PROJECT_VERSION: "1"
+              SWIFT_VERSION: "5.9"
+              CODE_SIGN_STYLE: Manual
+              DEVELOPMENT_LANGUAGE: pt-BR
+          targets:
+            AgendaLogo:
+              type: application
+              platform: iOS
+              deploymentTarget: "15.0"
+              sources:
+                - path: AgendaLogo
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.agendalogo.app
+                  TARGETED_DEVICE_FAMILY: "1"
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+              info:
+                path: AgendaLogo/Info.plist
+                properties:
+                  CFBundleDisplayName: Agenda Logo
+                  CFBundleShortVersionString: "$(MARKETING_VERSION)"
+                  CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+                  UILaunchScreen:
+                    UIColorName: ""
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                  ITSAppUsesNonExemptEncryption: false
+          schemes:
+            AgendaLogo:
+              build:
+                targets:
+                  AgendaLogo: all
+              run:
+                config: Debug
+              archive:
+                config: Release
+          FIMPROJ
+          cat > app/AgendaLogo/AgendaLogoApp.swift <<'FIMSW1'
+          import SwiftUI
+
+          @main
+          struct AgendaLogoApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                          .preferredColorScheme(.light)
+                  }
+              }
+          }
+          FIMSW1
+          cat > app/AgendaLogo/ContentView.swift <<'FIMSW2'
+          import SwiftUI
+          import WebKit
+
+          struct ContentView: View {
+              @StateObject private var model = WebViewModel()
+
+              var body: some View {
+                  ZStack {
+                      Color.white.ignoresSafeArea()
+                      WebView(model: model)
+                          .ignoresSafeArea()
+
+                      if model.isOffline {
+                          offlineView
+                              .background(Color.white.ignoresSafeArea())
+                      }
+                  }
+              }
+
+              private var offlineView: some View {
+                  VStack(spacing: 20) {
+                      Image(systemName: "wifi.slash")
+                          .font(.system(size: 56, weight: .light))
+                          .foregroundColor(Color(red: 0.02, green: 0.59, blue: 0.41))
+                      Text("Sem conexÃ£o")
+                          .font(.title2.bold())
+                      Text("Verifique sua internet para usar o Agenda Logo.\nSua agenda e seus clientes voltam a aparecer quando a conexÃ£o voltar.")
+                          .font(.subheadline)
+                          .foregroundColor(.gray)
+                          .multilineTextAlignment(.center)
+                          .padding(.horizontal, 32)
+                      Button {
+                          model.retry()
+                      } label: {
+                          Text("Tentar novamente")
+                              .font(.headline)
+                              .foregroundColor(.white)
+                              .padding(.horizontal, 32)
+                              .padding(.vertical, 14)
+                              .background(Color(red: 0.02, green: 0.59, blue: 0.41))
+                              .cornerRadius(16)
+                      }
+                  }
+              }
+          }
+          FIMSW2
+          cat > app/AgendaLogo/WebView.swift <<'FIMSW3'
+          import SwiftUI
+          import WebKit
+
+          final class WebViewModel: ObservableObject {
+              @Published var isLoading = false
+              @Published var isOffline = false
+              weak var webView: WKWebView?
+              let startURL = URL(string: "https://agendez-estetica-pobno0o.verdent.app")!
+
+              func retry() {
+                  isOffline = false
+                  webView?.reload()
+              }
+          }
+
+          struct WebView: UIViewRepresentable {
+              @ObservedObject var model: WebViewModel
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.allowsInlineMediaPlayback = true
+                  let web = WKWebView(frame: .zero, configuration: config)
+                  web.navigationDelegate = context.coordinator
+                  web.allowsBackForwardNavigationGestures = true
+                  web.scrollView.contentInsetAdjustmentBehavior = .never
+                  model.webView = web
+                  web.load(URLRequest(url: model.startURL))
+                  return web
+              }
+
+              func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+              func makeCoordinator() -> Coordinator {
+                  Coordinator(model)
+              }
+
+              final class Coordinator: NSObject, WKNavigationDelegate {
+                  private let model: WebViewModel
+
+                  init(_ model: WebViewModel) {
+                      self.model = model
+                  }
+
+                  func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+                      DispatchQueue.main.async { self.model.isLoading = true }
+                  }
+
+                  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+                      DispatchQueue.main.async {
+                          self.model.isLoading = false
+                          self.model.isOffline = false
+                      }
+                  }
+
+                  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+                      DispatchQueue.main.async {
+                          self.model.isLoading = false
+                          self.model.isOffline = true
+                      }
+                  }
+
+                  func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                               decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                      guard let url = navigationAction.request.url else {
+                          decisionHandler(.allow)
+                          return
+                      }
+                      let scheme = url.scheme?.lowercased() ?? ""
+
+                      // LigaÃ§Ãµes, e-mails, WhatsApp e SMS abrem no app correspondente do iPhone
+                      if ["tel", "mailto", "whatsapp", "sms", "itms-apps"].contains(scheme) {
+                          UIApplication.shared.open(url)
+                          decisionHandler(.cancel)
+                          return
+                      }
+
+                      // Login com Google nÃ£o funciona dentro do WebView (Google bloqueia):
+                      // abre no Safari do prÃ³prio iPhone
+                      let host = url.host?.lowercased() ?? ""
+                      if host.contains("accounts.google.com") || host.contains("appleid.apple.com") {
+                          UIApplication.shared.open(url)
+                          decisionHandler(.cancel)
+                          return
+                      }
+
+                      decisionHandler(.allow)
+                  }
+
+                  // Links com target="_blank" (janela nova) abrem na mesma tela
+                  func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                               for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+                      webView.load(navigationAction.request)
+                      return nil
+                  }
+              }
+          }
+          FIMSW3
+          cat > app/AgendaLogo/Assets.xcassets/Contents.json <<'FIMJS1'
+          {
+            "info" : {
+              "author" : "xcode",
+              "version" : 1
+            }
+          }
+          FIMJS1
+          cat > app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/Contents.json <<'FIMJS2'
+          {
+            "images" : [
+              {
+                "filename" : "icon-1024.png",
+                "idiom" : "universal",
+                "platform" : "ios",
+                "size" : "1024x1024"
+              }
+            ],
+            "info" : {
+              "author" : "xcode",
+              "version" : 1
+            }
+          }
+          FIMJS2
+          cat > app/fastlane/Fastfile <<'FIMFAST'
+          default_platform(:ios)
+
+          BUNDLE_ID = "com.agendalogo.app"
+
+          def connect_api_key
+            app_store_connect_api_key(
+              key_id: ENV["APPSTORE_KEY_ID"],
+              issuer_id: ENV["APPSTORE_ISSUER_ID"],
+              key_content: ENV["APPSTORE_P8"],
+              is_key_content_base64: false,
+              duration: 1200
+            )
+          end
+
+          platform :ios do
+            desc "Compila o app e envia para o TestFlight"
+            lane :release do
+              api_key = connect_api_key
+
+              begin
+                produce(
+                  api_key: api_key,
+                  app_identifier: BUNDLE_ID,
+                  app_name: "Agenda Logo",
+                  team_id: ENV["APPLE_TEAM_ID"],
+                  skip_itc: false
+                )
+              rescue => e
+                UI.warning("produce: #{e.message}")
+                UI.warning("Se o app ja existe na App Store Connect, pode ignorar este aviso.")
+              end
+
+              sh("xcodegen", "generate")
+
+              match(
+                type: "appstore",
+                readonly: false,
+                app_identifier: BUNDLE_ID,
+                team_id: ENV["APPLE_TEAM_ID"],
+                git_url: ENV["MATCH_GIT_URL"],
+                git_branch: "signing",
+                shallow_clone: false
+              )
+
+              build_app(
+                project: "AgendaLogo.xcodeproj",
+                scheme: "AgendaLogo",
+                export_method: "app-store",
+                xcargs: "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} CODE_SIGN_STYLE=Manual",
+                export_options: {
+                  provisioningProfiles: {
+                    BUNDLE_ID => "match AppStore #{BUNDLE_ID}"
+                  }
+                }
+              )
+
+              upload_to_testflight(
+                api_key: api_key,
+                ipa: lane_context[SharedValues::XCODEBUILD_IPA_PATH],
+                skip_waiting_for_build_processing: true
+              )
+
+              UI.success("Build enviado para o TestFlight com sucesso!")
+            end
+          end
+          FIMFAST
+          curl -fsSL "https://agendez-estetica-pobno0o.verdent.app/icons/agendalogo-1024.png" -o app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          sips -g pixelWidth -g pixelHeight app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          echo "Estrutura criada:"
+          find app -type f | sort
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Criar branch de assinatura (primeira execucao)
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git switch -C signing
+          git commit --allow-empty -m "Armazenamento de assinaturas"
+          git push origin signing || true
+
+      - name: Compilar e enviar ao TestFlight
+        run: fastlane release
+        working-directory: app
+
+      - name: Salvar o app (.ipa) como artefato
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AgendaLogo-ipa
+          path: app/*.ipa
+          if-no-files-found: ignore
