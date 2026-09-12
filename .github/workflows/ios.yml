@@ -10,7 +10,7 @@ jobs:
   release:
     name: Criar arquivos, compilar e enviar ao TestFlight
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -295,6 +295,9 @@ jobs:
                 git_branch: "signing",
                 shallow_clone: false
               )
+
+              sh("security", "unlock-keychain", "-p", ENV["MATCH_PASSWORD"]) || true
+              sh("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", ENV["MATCH_PASSWORD"]) || true
 
               build_app(
                 project: "AgendaLogo.xcodeproj",
