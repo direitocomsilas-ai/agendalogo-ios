@@ -293,14 +293,14 @@ jobs:
                 team_id: ENV["APPLE_TEAM_ID"],
                 git_url: ENV["MATCH_GIT_URL"],
                 git_branch: "signing",
-                shallow_clone: false
+                shallow_clone: false,
+                keychain_name: "build.keychain",
+                keychain_password: ENV["MATCH_PASSWORD"]
               )
 
               pw = ENV["MATCH_PASSWORD"].to_s
-              kc = `security list-keychains -d user`.split("\n").first.to_s.strip.delete('"')
-              `security unlock-keychain -p "#{pw}" "#{kc}" 2>/dev/null || true`
-              `security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "#{pw}" "#{kc}" 2>/dev/null || true`
-              UI.important("Keychain preparado: #{kc}")
+              `security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "#{pw}" build.keychain 2>/dev/null || true`
+              UI.important("Keychain dedicado build.keychain preparado")
 
               build_app(
                 project: "AgendaLogo.xcodeproj",
@@ -379,6 +379,15 @@ jobs:
           git switch -C signing
           git commit --allow-empty -m "Armazenamento de assinaturas"
           git push origin signing || true
+
+      - name: Criar chaveiro dedicado (evita travar no codesign)
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true
+          security create-keychain -p "$MATCH_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MATCH_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 build.keychain
+          security list-keychains
 
       - name: Compilar e enviar ao TestFlight
         run: fastlane release
