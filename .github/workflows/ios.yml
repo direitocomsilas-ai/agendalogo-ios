@@ -23,6 +23,11 @@ jobs:
       - name: Baixar o repositorio
         uses: actions/checkout@v4
 
+      - name: Selecionar Xcode 16.4 (formato de projeto novo)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
       - name: Criar a estrutura completa do app
         run: |
           mkdir -p app/AgendaLogo/Assets.xcassets/AppIcon.appiconset app/fastlane
