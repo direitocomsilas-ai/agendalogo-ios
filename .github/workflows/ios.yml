@@ -325,7 +325,7 @@ jobs:
           echo "Token gerado (${#TOKEN} caracteres)."
           REG=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIds" \
             -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-            -d '{"data":{"type":"bundleIds","attributes":{"identifier":"com.agendalogo.app","name":"Agenda Logo"}}}')
+            -d '{"data":{"type":"bundleIds","attributes":{"identifier":"com.agendalogo.app","name":"Agenda Logo","platform":"IOS"}}}')
           echo "$REG" | head -c 400; echo
           if echo "$REG" | grep -q '"errors"'; then
             if echo "$REG" | grep -q 'ENTITY_ALREADY_EXISTS\|409'; then
