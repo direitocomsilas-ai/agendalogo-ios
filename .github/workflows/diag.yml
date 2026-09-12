@@ -1,0 +1,63 @@
+name: "Diagnostico de assinatura"
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diag:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_P8: ${{ secrets.APPSTORE_P8 }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_URL: "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Selecionar Xcode
+        run: |
+          for v in 16.4 16.3; do
+            if [ -d "/Applications/Xcode_${v}.app" ]; then sudo xcode-select -s "/Applications/Xcode_${v}.app"; break; fi
+          done
+          xcodebuild -version
+
+      - name: Chaveiro dedicado
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true
+          security create-keychain -p "$MATCH_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MATCH_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 build.keychain
+
+      - name: Match (apenas ler certificados)
+        run: |
+          TOKEN=$(ruby -rjwt -ropenssl -e '
+            key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
+            now = Time.now.to_i
+            payload = { iss: ENV["APPSTORE_ISSUER_ID"], exp: now + 1200, aud: "appstoreconnect-v1" }
+            puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
+          ')
+          mkdir -p certs
+          cd certs
+          curl -s -X GET "https://api.appstoreconnect.apple.com/v1/certificates?filter%5BcertificateType%5D=DISTRIBUTION" -H "Authorization: Bearer $TOKEN" | head -c 500
+          echo ""
+          cd ..
+          fastlane run match type:appstore readonly:true app_identifier:com.agendalogo.app team_id:"$APPLE_TEAM_ID" git_url:"$MATCH_GIT_URL" git_branch:signing keychain_name:build.keychain keychain_password:"$MATCH_PASSWORD" skip_docs:true
+
+      - name: Identidades instaladas
+        run: |
+          echo "--- find-identity build.keychain ---"
+          security find-identity -v -p codesigning build.keychain || true
+          echo "--- find-identity default ---"
+          security find-identity -v -p codesigning || true
+
+      - name: Partition list
+        run: |
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MATCH_PASSWORD" build.keychain
+          echo "PARTITION-LIST OK (exit $?)"
