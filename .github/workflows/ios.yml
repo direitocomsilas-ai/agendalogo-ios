@@ -315,27 +315,39 @@ jobs:
 
       - name: Registrar bundle e criar app na App Store Connect
         run: |
-          mkdir -p "$RUNNER_TEMP/asc"
-          printf '%s\n' "$APPSTORE_P8" > "$RUNNER_TEMP/asc/AuthKey.p8"
-          B64() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          EXP=$(( $(date +%s) + 1200 ))
-          H=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$APPSTORE_KEY_ID" | B64)
-          P=$(printf '{"iss":"%s","exp":%s,"aud":"appstoreconnect-v1"}' "$APPSTORE_ISSUER_ID" "$EXP" | B64)
-          SIG=$(printf '%s.%s' "$H" "$P" | openssl dgst -sha256 -sign "$RUNNER_TEMP/asc/AuthKey.p8" | B64)
-          JWT="$H.$P.$SIG"
-          echo "Registrando bundle ID..."
-          RESP=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIds" \
-            -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+          set -e
+          TOKEN=$(ruby -rjwt -ropenssl -e '
+            key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
+            now = Time.now.to_i
+            payload = { iss: ENV["APPSTORE_ISSUER_ID"], exp: now + 1200, aud: "appstoreconnect-v1" }
+            puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
+          ')
+          echo "Token gerado (${#TOKEN} caracteres)."
+          REG=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIds" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
             -d '{"data":{"type":"bundleIds","attributes":{"identifier":"com.agendalogo.app","name":"Agenda Logo"}}}')
-          echo "$RESP" | head -c 600 || true
-          echo ""
-          echo "Criando o app..."
-          RESP=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/apps" \
-            -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+          echo "$REG" | head -c 400; echo
+          if echo "$REG" | grep -q '"errors"'; then
+            if echo "$REG" | grep -q 'ENTITY_ALREADY_EXISTS\|409'; then
+              echo "Bundle ID ja registrado. Seguindo."
+            else
+              echo "::warning::Registro do bundle retornou erro (veja acima)."
+            fi
+          fi
+          APP=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/apps" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
             -d '{"data":{"type":"apps","attributes":{"bundleId":"com.agendalogo.app","name":"Agenda Logo","sku":"AGENDALOGO1","primaryLocale":"pt-BR"}}}')
-          echo "$RESP" | head -c 600 || true
-          echo ""
-          echo "Se aparecer erro ENTITY_ALREADY_EXISTS/409 acima, tudo bem: o app ja existe e o processo continua."
+          echo "$APP" | head -c 400; echo
+          if echo "$APP" | grep -q '"errors"'; then
+            if echo "$APP" | grep -q 'ENTITY_ALREADY_EXISTS\|409'; then
+              echo "App ja existe na App Store Connect. Seguindo."
+            else
+              echo "::warning::Criacao do app retornou erro (veja acima)."
+            fi
+          fi
+          echo "Verificando se o app ja consta na App Store Connect..."
+          CHECK=$(curl -s "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=com.agendalogo.app" -H "Authorization: Bearer $TOKEN")
+          echo "$CHECK" | head -c 400; echo
 
       - name: Gerar projeto Xcode
         run: xcodegen generate
