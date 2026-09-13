@@ -152,7 +152,7 @@ jobs:
               @Published var isLoading = false
               @Published var isOffline = false
               weak var webView: WKWebView?
-              let startURL = URL(string: "https://agendez-estetica-pobno0o.verdent.app")!
+              let startURL = URL(string: "https://agendez-estetica-pobno0o.verdent.app/entrar")!
 
               func retry() {
                   isOffline = false
@@ -166,10 +166,15 @@ jobs:
               func makeUIView(context: Context) -> WKWebView {
                   let config = WKWebViewConfiguration()
                   config.allowsInlineMediaPlayback = true
+                  let viewportScript = WKUserScript(source: "var meta=document.createElement('meta');meta.name='viewport';meta.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';document.head.appendChild(meta);", injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+                  config.userContentController.addUserScript(viewportScript)
                   let web = WKWebView(frame: .zero, configuration: config)
                   web.navigationDelegate = context.coordinator
                   web.allowsBackForwardNavigationGestures = true
                   web.scrollView.contentInsetAdjustmentBehavior = .never
+                  web.scrollView.minimumScaleFactor = 1.0
+                  web.scrollView.maximumScaleFactor = 1.0
+                  web.scrollView.isScrollEnabled = true
                   model.webView = web
                   web.load(URLRequest(url: model.startURL))
                   return web
@@ -196,6 +201,8 @@ jobs:
                       DispatchQueue.main.async {
                           self.model.isLoading = false
                           self.model.isOffline = false
+                          webView.scrollView.zoomScale = 1.0
+                          webView.scrollView.contentInset = .zero
                       }
                   }
 
