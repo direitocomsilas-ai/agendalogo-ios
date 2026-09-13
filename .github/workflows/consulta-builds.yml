@@ -19,16 +19,10 @@ jobs:
           require "net/http"
           require "uri"
 
-          iss = ENV["APPSTORE_ISSUER_ID"]
-          kid = ENV["APPSTORE_KEY_ID"]
-          p8  = ENV["APPSTORE_P8"].gsub("\\n", "\n")
-          p8  = p8.gsub("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n") unless p8.include?("\n")
-          p8  = p8.gsub("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----") unless p8.include?("-----END PRIVATE KEY-----\n")
-
-          private_key = OpenSSL::PKey::EC.new(p8)
+          key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
           now = Time.now.to_i
-          payload = { iss: iss, iat: now, exp: now + 1200, aud: "appstoreconnect-v1" }
-          token = JWT.encode(payload, private_key, "ES256", header: { kid: kid, alg: "ES256", typ: "JWT" })
+          payload = { iss: ENV["APPSTORE_ISSUER_ID"], iat: now, exp: now + 1200, aud: "appstoreconnect-v1" }
+          token = JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
 
           apps = Net::HTTP.get_response(URI("https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=com.agendalogo.app"),
             { "Authorization" => "Bearer #{token}" })
