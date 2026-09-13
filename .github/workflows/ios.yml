@@ -172,8 +172,8 @@ jobs:
                   web.navigationDelegate = context.coordinator
                   web.allowsBackForwardNavigationGestures = true
                   web.scrollView.contentInsetAdjustmentBehavior = .never
-                  web.scrollView.minimumScaleFactor = 1.0
-                  web.scrollView.maximumScaleFactor = 1.0
+                  web.scrollView.minimumZoomScale = 1.0
+                  web.scrollView.maximumZoomScale = 1.0
                   web.scrollView.isScrollEnabled = true
                   model.webView = web
                   web.load(URLRequest(url: model.startURL))
