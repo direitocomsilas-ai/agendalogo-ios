@@ -1,0 +1,49 @@
+name: Consultar builds TestFlight
+
+"on":
+  workflow_dispatch:
+
+jobs:
+  consulta:
+    runs-on: macos-15
+    steps:
+      - name: Consultar builds na App Store Connect
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_P8: ${{ secrets.APPSTORE_P8 }}
+        run: |
+          ruby -e '
+          require "jwt"
+          require "json"
+          require "net/http"
+          require "uri"
+
+          iss = ENV["APPSTORE_ISSUER_ID"]
+          kid = ENV["APPSTORE_KEY_ID"]
+          p8  = ENV["APPSTORE_P8"].gsub("\\n", "\n")
+          p8  = p8.gsub("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n") unless p8.include?("\n")
+          p8  = p8.gsub("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----") unless p8.include?("-----END PRIVATE KEY-----\n")
+
+          private_key = OpenSSL::PKey::EC.new(p8)
+          now = Time.now.to_i
+          payload = { iss: iss, iat: now, exp: now + 1200, aud: "appstoreconnect-v1" }
+          token = JWT.encode(payload, private_key, "ES256", header: { kid: kid, alg: "ES256", typ: "JWT" })
+
+          apps = Net::HTTP.get_response(URI("https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=com.agendalogo.app"),
+            { "Authorization" => "Bearer #{token}" })
+          puts "APPS HTTP: #{apps.code}"
+          app_data = JSON.parse(apps.body)
+          app_id = app_data.dig("data", 0, "id")
+          puts "APP_ID: #{app_id}"
+
+          builds = Net::HTTP.get_response(URI("https://api.appstoreconnect.apple.com/v1/builds?filter[app]=#{app_id}&limit=10&sort=-version"),
+            { "Authorization" => "Bearer #{token}" })
+          puts "BUILDS HTTP: #{builds.code}"
+          data = JSON.parse(builds.body)
+          (data["data"] || []).each do |b|
+            a = b["attributes"]
+            puts "BUILD v#{a["version"]} | estado: #{a["processingState"]} | upload: #{a["uploadedDate"]} | beta: #{a.dig("betaAppReviewSubmission")}"
+          end
+          puts "TOTAL: #{(data["data"] || []).size}"
+          '
