@@ -108,7 +108,7 @@ jobs:
                   ZStack {
                       Color.white.ignoresSafeArea()
                       WebView(model: model)
-                          .ignoresSafeArea()
+                          .ignoresSafeArea(.container, edges: .bottom)
 
                       if model.isOffline {
                           offlineView
