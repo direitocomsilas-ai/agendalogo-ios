@@ -37,7 +37,7 @@ jobs:
           app_id = apps.dig("data", 0, "id")
           puts "APP_ID: #{app_id}"
 
-          vers = get(token, "#{base}/apps/#{app_id}/appStoreVersions?limit=10&sort=-versionString")
+          vers = get(token, "#{base}/apps/#{app_id}/appStoreVersions?limit=10")
           (vers["data"] || []).each do |v|
             a = v["attributes"]
             puts "VERSAO #{a["versionString"]} | estado: #{a["appStoreState"]}"
