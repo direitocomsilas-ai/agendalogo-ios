@@ -7,7 +7,8 @@ jobs:
   estado:
     runs-on: macos-15
     steps:
-      - name: Listar capturas atuais
+      - uses: actions/checkout@v4
+      - name: Remover duplicata e subir 06-whatsapp
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -18,6 +19,7 @@ jobs:
           require "json"
           require "net/http"
           require "uri"
+          require "digest"
 
           def req(token, method, url, body = nil)
             uri = URI(url)
@@ -27,7 +29,7 @@ jobs:
             r["Content-Type"] = "application/json"
             r.body = body.to_json if body
             res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(r) }
-            puts "#{method} #{url.sub("https://api.appstoreconnect.apple.com", "")} -> #{res.code}"
+            puts "#{method} ... -> #{res.code}"
             JSON.parse(res.body || "{}")
           end
 
@@ -35,24 +37,52 @@ jobs:
           now = Time.now.to_i
           token = JWT.encode({ iss: ENV["APPSTORE_ISSUER_ID"], iat: now, exp: now + 1200, aud: "appstoreconnect-v1" }, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
           base = "https://api.appstoreconnect.apple.com/v1"
+          set_id = "b1f2fa1f-3b19-47a7-ad37-f6662ce5ba18"
 
-          apps = req(token, "GET", "#{base}/apps?filter[bundleId]=com.agendalogo.app")
-          app_id = apps.dig("data", 0, "id")
-          vers = req(token, "GET", "#{base}/apps/#{app_id}/appStoreVersions?limit=10")
-          v10 = vers["data"].find { |v| v["attributes"]["versionString"] == "1.0" }
-          vid = v10["id"]
-          puts "VERSAO estado: #{v10["attributes"]["appStoreState"]}"
+          # 1. Lista screenshots do set
+          sets = req(token, "GET", "#{base}/appScreenshotSets/#{set_id}?include=appScreenshots")
+          shots = (sets["included"] || []).select { |i| i["type"] == "appScreenshots" }
+          puts "TOTAL NO SET: #{shots.size}"
 
-          locs = req(token, "GET", "#{base}/appStoreVersions/#{vid}/appStoreVersionLocalizations")
-          loc = locs["data"].find { |l| l["attributes"]["locale"] == "pt-BR" } || locs["data"][0]
-
-          sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc["id"]}/appScreenshotSets?include=appScreenshots&limit=30")
-          sets["data"].each do |s|
-            puts "SET #{s["attributes"]["screenshotDisplayType"]} id=#{s["id"]}"
+          # 2. Deleta a duplicata de 01-agenda (a ultima)
+          dups = shots.select { |s| s["attributes"]["fileName"] == "01-agenda.png" }
+          if dups.size > 1
+            del = dups.last
+            req(token, "DELETE", "#{base}/appScreenshots/#{del["id"]}")
+            puts "DUPLICATA REMOVIDA: #{del["id"][0,8]}"
+          else
+            puts "SEM DUPLICATAS (#{dups.size})"
           end
-          (sets["included"] || []).each do |sc|
-            a = sc["attributes"] || {}
-            st = a.dig("assetDeliveryState", "state")
-            puts "  IMG #{sc["id"][0,8]} arquivo=#{a["fileName"]} estado=#{st}"
+
+          # 3. Sube 06-whatsapp.png se nao existir
+          tem06 = shots.any? { |s| s["attributes"]["fileName"] == "06-whatsapp.png" }
+          if tem06
+            puts "06-whatsapp JA EXISTE"
+          else
+            path = "screenshots/06-whatsapp.png"
+            payload = { data: { type: "appScreenshots", attributes: { fileName: File.basename(path), fileSize: File.size(path) }, relationships: { appScreenshotSet: { data: { type: "appScreenshotSets", id: set_id } } } } }
+            res = req(token, "POST", "#{base}/appScreenshots", payload)
+            sid = res.dig("data", "id")
+            if !sid
+              puts "ERRO reserva: #{res}"
+              exit 1
+            end
+            (res.dig("data", "attributes", "uploadOperations") || []).each do |op|
+              uri = URI(op["url"])
+              r = Net::HTTP::Put.new(uri)
+              (op["requestHeaders"] || []).each { |h| r[h["name"]] = h["value"] }
+              r.body = File.binread(path)
+              r2 = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(r) }
+              puts "upload 06-whatsapp -> #{r2.code}"
+            end
+            md5 = Digest::MD5.file(path).hexdigest
+            req(token, "PATCH", "#{base}/appScreenshots/#{sid}", { data: { id: sid, type: "appScreenshots", attributes: { uploaded: true, sourceFileChecksum: md5 } } })
+            puts "06-WHATSAPP ENVIADA"
           end
+
+          # 4. Lista final
+          sets2 = req(token, "GET", "#{base}/appScreenshotSets/#{set_id}?include=appScreenshots")
+          shots2 = (sets2["included"] || []).select { |i| i["type"] == "appScreenshots" }
+          puts "FINAL: #{shots2.size} imagens"
+          shots2.each { |s| puts "  IMG #{s["id"][0,8]} #{s["attributes"]["fileName"]} #{s.dig("attributes", "assetDeliveryState", "state")}" }
           '
