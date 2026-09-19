@@ -46,14 +46,13 @@ jobs:
           locs = req(token, "GET", "#{base}/appStoreVersions/#{vid}/appStoreVersionLocalizations")
           loc = locs["data"].find { |l| l["attributes"]["locale"] == "pt-BR" } || locs["data"][0]
 
-          sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc["id"]}/appScreenshotSets?limit=30")
+          sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc["id"]}/appScreenshotSets?include=appScreenshots&limit=30")
           sets["data"].each do |s|
             puts "SET #{s["attributes"]["screenshotDisplayType"]} id=#{s["id"]}"
-            scs = req(token, "GET", "#{base}/appScreenshots?filter[appScreenshotSet]=#{s["id"]}&limit=30")
-            scs["data"].each do |sc|
-              a = sc["attributes"] || {}
-              st = a.dig("assetDeliveryState", "state")
-              puts "  IMG #{sc["id"][0,8]} arquivo=#{a["fileName"]} estado=#{st}"
-            end
+          end
+          (sets["included"] || []).each do |sc|
+            a = sc["attributes"] || {}
+            st = a.dig("assetDeliveryState", "state")
+            puts "  IMG #{sc["id"][0,8]} arquivo=#{a["fileName"]} estado=#{st}"
           end
           '
