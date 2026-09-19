@@ -1,14 +1,13 @@
-name: Finalizar versao e enviar para revisao
+name: Estado versao App Store
 
 "on":
   workflow_dispatch:
 
 jobs:
-  finalizar:
+  estado:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - name: Upload capturas + build + nota + enviar revisao
+      - name: Listar capturas atuais
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -19,11 +18,10 @@ jobs:
           require "json"
           require "net/http"
           require "uri"
-          require "digest"
 
           def req(token, method, url, body = nil)
             uri = URI(url)
-            klass = { "GET" => Net::HTTP::Get, "PATCH" => Net::HTTP::Patch, "POST" => Net::HTTP::Post }[method]
+            klass = { "GET" => Net::HTTP::Get, "PATCH" => Net::HTTP::Patch, "POST" => Net::HTTP::Post, "DELETE" => Net::HTTP::Delete }[method]
             r = klass.new(uri)
             r["Authorization"] = "Bearer #{token}"
             r["Content-Type"] = "application/json"
@@ -40,69 +38,23 @@ jobs:
 
           apps = req(token, "GET", "#{base}/apps?filter[bundleId]=com.agendalogo.app")
           app_id = apps.dig("data", 0, "id")
-          puts "APP: #{app_id}"
-
           vers = req(token, "GET", "#{base}/apps/#{app_id}/appStoreVersions?limit=10")
           v10 = vers["data"].find { |v| v["attributes"]["versionString"] == "1.0" }
           vid = v10["id"]
-          puts "VERSAO 1.0: #{vid} estado: #{v10["attributes"]["appStoreState"]}"
+          puts "VERSAO estado: #{v10["attributes"]["appStoreState"]}"
 
-          # --- 1. Upload das capturas no set APP_IPHONE_67 ---
           locs = req(token, "GET", "#{base}/appStoreVersions/#{vid}/appStoreVersionLocalizations")
           loc = locs["data"].find { |l| l["attributes"]["locale"] == "pt-BR" } || locs["data"][0]
-          loc_id = loc["id"]
 
-          sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc_id}/appScreenshotSets")
-          set = sets["data"].find { |s| s["attributes"]["screenshotDisplayType"] == "APP_IPHONE_67" }
-          if set
-            set_id = set["id"]
-            puts "SET 6.7 existente: #{set_id}"
-          else
-            r = req(token, "POST", "#{base}/appScreenshotSets", { data: { type: "appScreenshotSets", attributes: { screenshotDisplayType: "APP_IPHONE_67" }, relationships: { appStoreVersionLocalization: { data: { type: "appStoreVersionLocalizations", id: loc_id } } } } })
-            set_id = r.dig("data", "id")
-            puts "SET 6.7 criado: #{set_id}"
-          end
-
-          files = Dir.glob("screenshots/*.png").sort
-          puts "IMAGENS: #{files.size}"
-          files.each_with_index do |path, i|
-            payload = { data: { type: "appScreenshots", attributes: { fileName: File.basename(path), fileSize: File.size(path) }, relationships: { appScreenshotSet: { data: { type: "appScreenshotSets", id: set_id } } } } }
-            res = req(token, "POST", "#{base}/appScreenshots", payload)
-            sid = res.dig("data", "id")
-            if !sid
-              puts "  ERRO ao reservar #{path}: #{res}"
-              next
+          sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc["id"]}/appScreenshotSets?limit=30")
+          sets["data"].each do |s|
+            puts "SET #{s["attributes"]["screenshotDisplayType"]} id=#{s["id"]}"
+            sids = (s.dig("relationships", "appScreenshots", "data") || []).map { |d| d["id"] }
+            sids.each do |sid|
+              sc = req(token, "GET", "#{base}/appScreenshots/#{sid}")
+              a = sc.dig("data", "attributes") || {}
+              st = a.dig("assetDeliveryState", "state")
+              puts "  IMG #{sid[0,8]} arquivo=#{a["fileName"]} estado=#{st}"
             end
-            (res.dig("data", "attributes", "uploadOperations") || []).each do |op|
-              uri = URI(op["url"])
-              r = Net::HTTP::Put.new(uri)
-              (op["requestHeaders"] || []).each { |h| r[h["name"]] = h["value"] }
-              r.body = File.binread(path)
-              r2 = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(r) }
-              puts "  [#{i+1}/#{files.size}] upload #{File.basename(path)} -> #{r2.code}"
-            end
-            md5 = Digest::MD5.file(path).hexdigest
-            req(token, "PATCH", "#{base}/appScreenshots/#{sid}", { data: { id: sid, type: "appScreenshots", attributes: { uploaded: true, sourceFileChecksum: md5 } } })
           end
-          sleep 20
-
-          # --- 2. Selecionar build 24 ---
-          builds = req(token, "GET", "#{base}/builds?filter[app]=#{app_id}&filter[version]=24")
-          build_id = builds.dig("data", 0, "id")
-          puts "BUILD 24: #{build_id}"
-          r = req(token, "PATCH", "#{base}/appStoreVersions/#{vid}", { data: { id: vid, type: "appStoreVersions", relationships: { build: { data: { id: build_id, type: "builds" } } } } })
-          puts "BUILD SELECIONADO: #{r.dig("data", "attributes", "appStoreState") || r}"
-
-          # --- 3. Nota de revisao ---
-          nota = "Login demo: demo.agendalogo@agendez.app / Senha: Demo@2026\nA conta demo ja tem servicos, clientes e agendamentos de exemplo. A Central de WhatsApp fica desconectada na demo - comportamento esperado, pois cada profissional conecta seu proprio numero (WhatsApp Business Platform/Meta). Para testar a exclusao de conta: cadastrar uma conta nova no app e usar Configuracoes > Excluir minha conta (a conta demo e protegida contra exclusao)."
-          req(token, "PATCH", "#{base}/appStoreVersionLocalizations/#{loc_id}", { data: { id: loc_id, type: "appStoreVersionLocalizations", attributes: { appReviewNote: nota } } })
-          puts "NOTA DE REVISAO SALVA"
-
-          # --- 4. Enviar para revisao ---
-          r = req(token, "POST", "#{base}/appStoreVersionSubmissions", { data: { type: "appStoreVersionSubmissions", relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: vid } } } } })
-          puts "SUBMISSAO: #{r.dig("data", "id") ? "ENVIADA (id " + r.dig("data", "id") + ")" : r}"
-
-          # --- 5. Estado final ---
-          vers2 = req(token, "GET", "#{base}/appStoreVersions/#{vid}")
-          puts "ESTADO FINAL: #{vers2.dig("data", "attributes", "appStoreState")}"
           '
