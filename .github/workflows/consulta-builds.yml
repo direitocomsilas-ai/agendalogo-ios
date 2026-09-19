@@ -1,13 +1,13 @@
-name: Consultar rejeicao App Store
+name: Estado versao App Store
 
 "on":
   workflow_dispatch:
 
 jobs:
-  consulta:
+  estado:
     runs-on: macos-15
     steps:
-      - name: Consultar versoes e problemas da revisao
+      - name: Consultar estado completo da versao
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -19,13 +19,16 @@ jobs:
           require "net/http"
           require "uri"
 
-          def get(token, url)
+          def req(token, method, url, body = nil)
             uri = URI(url)
-            req = Net::HTTP::Get.new(uri)
-            req["Authorization"] = "Bearer #{token}"
-            res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
-            puts "HTTP #{res.code} #{url}"
-            JSON.parse(res.body)
+            klass = { "GET" => Net::HTTP::Get, "PATCH" => Net::HTTP::Patch, "POST" => Net::HTTP::Post }[method]
+            r = klass.new(uri)
+            r["Authorization"] = "Bearer #{token}"
+            r["Content-Type"] = "application/json"
+            r.body = body.to_json if body
+            res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(r) }
+            puts "#{method} #{url} -> #{res.code}"
+            JSON.parse(res.body || "{}")
           end
 
           key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
@@ -33,31 +36,45 @@ jobs:
           token = JWT.encode({ iss: ENV["APPSTORE_ISSUER_ID"], iat: now, exp: now + 1200, aud: "appstoreconnect-v1" }, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
 
           base = "https://api.appstoreconnect.apple.com/v1"
-          apps = get(token, "#{base}/apps?filter[bundleId]=com.agendalogo.app")
+          apps = req(token, "GET", "#{base}/apps?filter[bundleId]=com.agendalogo.app")
           app_id = apps.dig("data", 0, "id")
-          puts "APP_ID: #{app_id}"
+          puts "APP: #{app_id}"
 
-          vers = get(token, "#{base}/apps/#{app_id}/appStoreVersions?limit=10")
-          (vers["data"] || []).each do |v|
-            a = v["attributes"]
-            puts "VERSAO #{a["versionString"]} | estado: #{a["appStoreState"]}"
-            issues = get(token, "#{base}/appStoreVersions/#{v["id"]}/submissionIssues?include=submissionIssueThreads")
-            (issues["data"] || []).each do |i|
-              at = i["attributes"] || {}
-              puts "  ISSUE: #{at["title"]}"
-              puts "  CORPO: #{at["body"]}"
-              puts "  ATIVO: #{at["isActive"]}"
+          vers = req(token, "GET", "#{base}/apps/#{app_id}/appStoreVersions?limit=10")
+          v10 = nil
+          vers["data"].each do |v|
+            puts "VERSAO #{v["attributes"]["versionString"]} id=#{v["id"]} estado=#{v["attributes"]["appStoreState"]}"
+            v10 = v if v["attributes"]["versionString"] == "1.0"
+          end
+          exit 1 unless v10
+          vid = v10["id"]
+
+          brel = v10.dig("relationships", "build", "data")
+          puts "BUILD SELECIONADO ATUAL: #{brel ? brel["id"] : "nenhum"}"
+
+          locs = req(token, "GET", "#{base}/appStoreVersions/#{vid}/appStoreVersionLocalizations")
+          loc_id = nil
+          locs["data"].each do |l|
+            a = l["attributes"]
+            puts "LOC #{a["locale"]} id=#{l["id"]}"
+            puts "  descricao: #{(a["description"] || "VAZIA")[0,60]}"
+            puts "  nota_revisao: #{a["appReviewNote"] ? a["appReviewNote"][0,60] : "VAZIA"}"
+            loc_id ||= l["id"]
+          end
+
+          if loc_id
+            sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc_id}/appScreenshotSets?include=appScreenshots&limit=30")
+            if sets["data"].empty?
+              puts "SCREENSHOTS: NENHUM SET (capturas nao enviadas)"
             end
-            (issues["included"] || []).each do |inc|
-              at = inc["attributes"] || {}
-              puts "  THREAD[#{inc["type"]}] #{at["subject"]}"
-              puts "  MSG: #{at["body"]}"
+            sets["data"].each do |s|
+              count = (sets["included"] || []).count { |i| i["type"] == "appScreenshots" && i.dig("relationships", "appScreenshotSet", "data", "id") == s["id"] }
+              puts "SCREENSHOT SET #{s["attributes"]["screenshotDisplayType"]}: #{count} imagem(ns)"
             end
           end
 
-          builds = get(token, "#{base}/builds?filter[app]=#{app_id}&limit=5&sort=-version")
-          (builds["data"] || []).each do |b|
-            a = b["attributes"]
-            puts "BUILD v#{a["version"]} | processing: #{a["processingState"]}"
+          builds = req(token, "GET", "#{base}/builds?filter[app]=#{app_id}&limit=5&sort=-version")
+          builds["data"].each do |b|
+            puts "BUILD DISPONIVEL v#{b["attributes"]["version"]} id=#{b["id"]} estado=#{b["attributes"]["processingState"]}"
           end
           '
