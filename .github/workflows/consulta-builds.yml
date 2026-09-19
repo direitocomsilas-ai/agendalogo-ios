@@ -49,12 +49,11 @@ jobs:
           sets = req(token, "GET", "#{base}/appStoreVersionLocalizations/#{loc["id"]}/appScreenshotSets?limit=30")
           sets["data"].each do |s|
             puts "SET #{s["attributes"]["screenshotDisplayType"]} id=#{s["id"]}"
-            sids = (s.dig("relationships", "appScreenshots", "data") || []).map { |d| d["id"] }
-            sids.each do |sid|
-              sc = req(token, "GET", "#{base}/appScreenshots/#{sid}")
-              a = sc.dig("data", "attributes") || {}
+            scs = req(token, "GET", "#{base}/appScreenshots?filter[appScreenshotSet]=#{s["id"]}&limit=30")
+            scs["data"].each do |sc|
+              a = sc["attributes"] || {}
               st = a.dig("assetDeliveryState", "state")
-              puts "  IMG #{sid[0,8]} arquivo=#{a["fileName"]} estado=#{st}"
+              puts "  IMG #{sc["id"][0,8]} arquivo=#{a["fileName"]} estado=#{st}"
             end
           end
           '
