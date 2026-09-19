@@ -169,6 +169,8 @@ jobs:
                   let viewportScript = WKUserScript(source: "var meta=document.createElement('meta');meta.name='viewport';meta.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';document.head.appendChild(meta);", injectionTime: .atDocumentEnd, forMainFrameOnly: true)
                   config.userContentController.addUserScript(viewportScript)
                   let web = WKWebView(frame: .zero, configuration: config)
+                  let defaultUA = web.value(forKey: "userAgent") as? String ?? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+                  web.customUserAgent = defaultUA + " AgendaLogoApp/1"
                   web.navigationDelegate = context.coordinator
                   web.allowsBackForwardNavigationGestures = true
                   web.scrollView.contentInsetAdjustmentBehavior = .never
