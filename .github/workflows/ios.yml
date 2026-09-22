@@ -78,7 +78,6 @@ jobs:
                   NSPhotoLibraryUsageDescription: Usamos o acesso às suas fotos para você escolher imagens de perfil, serviços e produtos.
                   NSPhotoLibraryAddUsageDescription: Permite salvar imagens na sua galeria de fotos.
                   NSMicrophoneUsageDescription: Usamos o microfone para gravação de áudio.
-                                    NSMicrophoneUsageDescription: Usamos o microfone para gravação de áudio.
           schemes:
             AgendaLogo:
               build:
