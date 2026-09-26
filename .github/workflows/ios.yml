@@ -474,7 +474,7 @@ jobs:
             puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
           ')
           echo "Procurando perfis antigos do app..."
-          for PID in $(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?filter[name]=match%20AppStore%20com.agendalogo.app&limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); (d["data"]||[]).each{|p| puts p["id"]}'); do
+          for PID in $(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); (d["data"]||[]).each{|p| puts p["id"] if p.dig("attributes","name").to_s.include?("agendalogo")}'); do
             echo "Deletando perfil antigo $PID..."
             curl -s -X DELETE "https://api.appstoreconnect.apple.com/v1/profiles/$PID" -H "Authorization: Bearer $TOKEN" -o /dev/null -w "delete:%{http_code}\n"
           done
