@@ -464,6 +464,22 @@ jobs:
             fi
           fi
 
+      - name: Remover perfil antigo (forca recriacao com Sign in with Apple)
+        run: |
+          set -e
+          TOKEN=$(ruby -rjwt -ropenssl -e '
+            key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
+            now = Time.now.to_i
+            payload = { iss: ENV["APPSTORE_ISSUER_ID"], exp: now + 1200, aud: "appstoreconnect-v1" }
+            puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
+          ')
+          echo "Procurando perfis antigos do app..."
+          for PID in $(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?filter[name]=match%20AppStore%20com.agendalogo.app&limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); (d["data"]||[]).each{|p| puts p["id"]}'); do
+            echo "Deletando perfil antigo $PID..."
+            curl -s -X DELETE "https://api.appstoreconnect.apple.com/v1/profiles/$PID" -H "Authorization: Bearer $TOKEN" -o /dev/null -w "delete:%{http_code}\n"
+          done
+          echo "Perfis antigos removidos (se existiam)."
+
       - name: Gerar projeto Xcode
         run: xcodegen generate
         working-directory: app
