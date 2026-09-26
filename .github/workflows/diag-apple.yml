@@ -5,7 +5,7 @@ jobs:
   diag:
     runs-on: macos-latest
     steps:
-      - name: Diagnosticar capabilities e perfil
+      - name: Verdade absoluta
         run: |
           set -e
           TOKEN=$(ruby -rjwt -ropenssl -e '
@@ -15,22 +15,20 @@ jobs:
             puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
           ')
           BID=86KCS2L573
-          echo "=== capabilities ANTES (raw) ==="
-          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds/$BID/capabilities" -H "Authorization: Bearer $TOKEN"; echo ""
-          echo "=== habilitando novamente (idempotente) ==="
-          curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities" \
-            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-            -d "{\"data\":{\"type\":\"bundleIdCapabilities\",\"attributes\":{\"capabilityType\":\"APPLE_ID_AUTH\",\"settings\":[{\"key\":\"APPLE_ID_AUTH_APP_CONSENT\",\"options\":[{\"key\":\"PRIMARY_APP_CONSENT\"}]}]},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}}}}}"; echo ""
-          echo "=== capabilities DEPOIS (raw) ==="
-          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds/$BID/capabilities" -H "Authorization: Bearer $TOKEN"; echo ""
-          echo "=== perfil do app: entitlements ==="
-          PID2=$(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=30" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); p=(d["data"]||[]).find{|x| x.dig("attributes","name").to_s.include?("agendalogo")}; puts p ? p["id"] : ""')
+          echo "=== A. bundleIdCapabilities por filtro (raw) ==="
+          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities?filter%5BbundleId%5D=$BID" -H "Authorization: Bearer $TOKEN"; echo ""
+          echo "=== B. capability direto (self link, raw) ==="
+          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/$BID`_APPLE_ID_AUTH" -H "Authorization: Bearer $TOKEN"; echo ""
+          echo "=== C. perfil atual do match: baixar e decodificar ==="
+          PID2=$(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); p=(d["data"]||[]).find{|x| x.dig("attributes","name").to_s.include?("agendalogo")}; puts p ? p["id"] : ""')
           echo "perfil: $PID2"
-          curl -s "https://api.appstoreconnect.apple.com/v1/profiles/$PID2/profileContent" -H "Authorization: Bearer $TOKEN" -o /tmp/profile.mobileprovision
-          ls -la /tmp/profile.mobileprovision
-          security cms -D -i /tmp/profile.mobileprovision > /tmp/profile.plist
-          plutil -p /tmp/profile.plist | head -50
-          echo "=== Entitlements (extraido) ==="
+          echo "--- profileContent headers ---"
+          curl -s -D - -o /tmp/profile.mobileprovision "https://api.appstoreconnect.apple.com/v1/profiles/$PID2/profileContent" -H "Authorization: Bearer $TOKEN" | head -15
+          echo "--- primeiros bytes do arquivo ---"
+          head -c 300 /tmp/profile.mobileprovision | strings | head -10
+          echo "--- decodificar CMS ---"
+          security cms -D -i /tmp/profile.mobileprovision > /tmp/profile.plist || echo "cms falhou"
+          echo "--- Entitlements do perfil ---"
           plutil -extract Entitlements xml1 -o - /tmp/profile.plist
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
