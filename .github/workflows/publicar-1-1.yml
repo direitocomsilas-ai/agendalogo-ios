@@ -148,17 +148,40 @@ jobs:
           api -X PATCH "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID" \
             -d "{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\",\"relationships\":{\"build\":{\"data\":{\"type\":\"builds\",\"id\":\"$BUILDID\"}}}}}" | head -c 400; echo ""
 
-          echo "=== 6. Submetendo para revisao ==="
-          api -X POST "https://api.appstoreconnect.apple.com/v1/appSubmissions" \
-            -d "{\"data\":{\"type\":\"appSubmissions\",\"relationships\":{\"appStoreVersion\":{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\"}}}}}" > /tmp/sub.json
-          head -c 600 /tmp/sub.json; echo ""
-          if grep -q '"errors"' /tmp/sub.json; then
-            if grep -qi 'already\|STATE\|WAITING' /tmp/sub.json; then
-              echo "versao ja esta em revisao - OK"
-            else
-              echo "ERRO na submissao (ver resposta acima)"
-              exit 1
+          echo "=== 5.5 Informacoes de revisao da versao 1.1 ==="
+          api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID/appReviewDetail" > /tmp/rd.json
+          head -c 400 /tmp/rd.json; echo ""
+
+          echo "=== 6. Submetendo para revisao (novo fluxo reviewSubmissions) ==="
+          api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissions" \
+            -d "{\"data\":{\"type\":\"reviewSubmissions\",\"relationships\":{\"app\":{\"data\":{\"type\":\"apps\",\"id\":\"$APP\"}}}}}" > /tmp/rs.json
+          head -c 400 /tmp/rs.json; echo ""
+          RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rs.json")); puts d.dig("data","id") || ""' 2>/dev/null || echo "")
+          if [ -z "$RSID" ]; then
+            echo "buscando reviewSubmission existente em rascunho..."
+            api "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?filter%5Bapp%5D=$APP&limit=5" > /tmp/rsl.json
+            RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rsl.json")); v=(d["data"]||[]).find{|x| x.dig("attributes","state")=="UNCOMMITTED"}; puts v ? v["id"] : ""' 2>/dev/null || echo "")
+          fi
+          if [ -z "$RSID" ]; then echo "ERRO: nao consegui criar/obter reviewSubmission"; exit 1; fi
+          echo "reviewSubmission: $RSID"
+
+          echo "--- adicionando item (versao 1.1) ---"
+          api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissionItems" \
+            -d "{\"data\":{\"type\":\"reviewSubmissionItems\",\"relationships\":{\"reviewSubmission\":{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"$RSID\"}},\"appStoreVersion\":{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\"}}}}}" > /tmp/rsi.json
+          head -c 400 /tmp/rsi.json; echo ""
+          if grep -q '"errors"' /tmp/rsi.json; then
+            if ! grep -qi 'already\|EXIST\|409' /tmp/rsi.json; then
+              echo "AVISO: item nao adicionado (ver resposta acima)"
             fi
+          fi
+
+          echo "--- enviando para a fila de revisao ---"
+          api -X PATCH "https://api.appstoreconnect.apple.com/v1/reviewSubmissions/$RSID" \
+            -d "{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"$RSID\",\"attributes\":{\"state\":\"WAITING_FOR_REVIEW\"}}}" > /tmp/rss.json
+          head -c 700 /tmp/rss.json; echo ""
+          if grep -q '"errors"' /tmp/rss.json; then
+            echo "ERRO na submissao (ver resposta acima)"
+            exit 1
           fi
           echo "=== FEITO ==="
         env:
