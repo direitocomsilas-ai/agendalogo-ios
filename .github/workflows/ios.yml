@@ -66,7 +66,8 @@ jobs:
               entitlements:
                 path: AgendaLogo/AgendaLogo.entitlements
                 properties:
-                  com.apple.developer.authentication.services.appleid.applesignin: true
+                  com.apple.developer.applesignin:
+                    - Default
               info:
                 path: AgendaLogo/Info.plist
                 properties:
