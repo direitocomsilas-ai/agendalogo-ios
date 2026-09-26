@@ -460,7 +460,7 @@ jobs:
               echo "Habilitando Sign in with Apple..."
               curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities" \
                 -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-                -d "{\"data\":{\"type\":\"bundleIdCapabilities\",\"attributes\":{\"capabilityType\":\"APPLE_ID_AUTH\"},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}}}}}" | head -c 400; echo
+                -d "{\"data\":{\"type\":\"bundleIdCapabilities\",\"attributes\":{\"capabilityType\":\"APPLE_ID_AUTH\",\"settings\":[{\"key\":\"APPLE_ID_AUTH_APP_CONSENT\",\"options\":[{\"key\":\"PRIMARY_APP_CONSENT\"}]}]},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}}}}}" | head -c 400; echo
             fi
           fi
 
