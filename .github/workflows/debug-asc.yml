@@ -5,10 +5,11 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Ver respostas da API
+      - name: Ver erros completos da versao 1.1
         run: |
           set -e
           APP=6811427570
+          NEWID=912785e7-b572-4cb1-afa3-94f6ed28d5b2
           gen_token() {
             ruby -rjwt -ropenssl -e '
               key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
@@ -19,27 +20,25 @@ jobs:
           }
           api() {
             T=$(gen_token)
-            curl -s -w "\nHTTP_STATUS:%{http_code}\n" -H "Authorization: Bearer $T" -H "Content-Type: application/json" "$@"
+            curl -s -H "Authorization: Bearer $T" -H "Content-Type: application/json" "$@"
           }
 
-          echo "===== A. builds simples ====="
-          api "https://api.appstoreconnect.apple.com/v1/builds?filter%5Bapp%5D=$APP&limit=5" | head -c 2500
+          echo "===== A. reviewSubmissionItems: erro completo ====="
+          api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissionItems" \
+            -d "{\"data\":{\"type\":\"reviewSubmissionItems\",\"relationships\":{\"reviewSubmission\":{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"5edad32a-3884-4fe4-895e-d306d1514070\"}},\"appStoreVersion\":{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\"}}}}}"
           echo ""
-          echo "===== B. builds com preReleaseVersion ====="
-          api "https://api.appstoreconnect.apple.com/v1/builds?filter%5Bapp%5D=$APP&include=preReleaseVersion&limit=5" > /tmp/b.json
-          ruby -rjson -e '
-            d=JSON.parse(File.read("/tmp/b.json"))
-            puts "data size: " + (d["data"]||[]).size.to_s
-            (d["data"]||[]).first(5).each{|b| puts "BUILD " + b["id"] + " | versao(build num): " + b.dig("attributes","version").to_s + " | processado: " + b.dig("attributes","processed").to_s + " | estado: " + b.dig("attributes","processingState").to_s + " | preId: " + b.dig("relationships","preReleaseVersion","data","id").to_s }
-            puts "included size: " + (d["included"]||[]).size.to_s
-            (d["included"]||[]).each{|p| puts "INCL " + p["type"] + " " + p["id"] + " | versionString: " + p.dig("attributes","versionString").to_s }
-            if d["errors"]; puts "ERROS: " + d["errors"].map{|e| e["status"].to_s + " " + e["code"].to_s + " " + e["title"].to_s}.join(" ; ") ; end'
+          echo "===== B. localizacao da versao 1.1 ====="
+          api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID/appStoreVersionLocalizations?limit=5"
           echo ""
-          echo "===== C. versoes ====="
-          api "https://api.appstoreconnect.apple.com/v1/apps/$APP/appStoreVersions?filter%5Bplatform%5D=IOS&limit=20" > /tmp/v.json
-          ruby -rjson -e '
-            d=JSON.parse(File.read("/tmp/v.json"))
-            (d["data"]||[]).each{|v| puts "VERSAO " + v["id"] + " | " + v.dig("attributes","versionString").to_s + " | estado: " + v.dig("attributes","appStoreState").to_s + " | build: " + v.dig("relationships","build","data","id").to_s }'
+          echo "===== C. app info (nome, locale) ====="
+          api "https://api.appstoreconnect.apple.com/v1/apps/$APP?include=appStoreVersions"
+          echo ""
+          echo "===== D. itens da reviewSubmission ====="
+          api "https://api.appstoreconnect.apple.com/v1/reviewSubmissions/5edad32a-3884-4fe4-895e-d306d1514070/items?limit=10"
+          echo ""
+          echo "===== E. reviewSubmissions do app ====="
+          api "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?filter%5Bapp%5D=$APP&limit=5"
+          echo ""
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
