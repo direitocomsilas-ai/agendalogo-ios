@@ -1,0 +1,38 @@
+name: Diagnostico Sign in with Apple
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: macos-latest
+    steps:
+      - name: Diagnosticar capabilities e perfil
+        run: |
+          set -e
+          TOKEN=$(ruby -rjwt -ropenssl -e '
+            key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
+            now = Time.now.to_i
+            payload = { iss: ENV["APPSTORE_ISSUER_ID"], exp: now + 1200, aud: "appstoreconnect-v1" }
+            puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
+          ')
+          echo "=== 1. Bundle IDs ==="
+          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds?limit=20" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); (d["data"]||[]).each{|b| puts b["id"].to_s + " => " + b["attributes"]["identifier"].to_s}'
+          echo "=== 2. Capabilities do com.agendalogo.app ==="
+          BID=$(curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds?filter%5Bidentifier%5D=com.agendalogo.app" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); puts d.dig("data",0,"id")')
+          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds/$BID/capabilities?limit=20" -H "Authorization: Bearer $TOKEN"
+          echo ""
+          echo "=== 3. Perfis (todos) ==="
+          curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=30" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); (d["data"]||[]).each{|p| puts p["id"].to_s + " | " + p["attributes"]["name"].to_s + " | " + p["attributes"]["profileState"].to_s}'
+          echo "=== 4. Conteudo do perfil do app ==="
+          PID2=$(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=30" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); p=(d["data"]||[]).find{|x| x.dig("attributes","name").to_s.include?("agendalogo")}; puts p ? p["id"] : ""')
+          if [ -n "$PID2" ]; then
+            curl -s "https://api.appstoreconnect.apple.com/v1/profiles/$PID2/profileContent" -H "Authorization: Bearer $TOKEN" -o /tmp/profile.mobileprovision
+            security cms -D -i /tmp/profile.mobileprovision > /tmp/profile.plist 2>/dev/null || true
+            echo "--- Entitlements do perfil ---"
+            ruby -e 'require "plist"; p = Plist.parse_xml("/tmp/profile.plist"); puts p["Entitlements"].inspect' 2>/dev/null || plutil -p /tmp/profile.plist | head -40
+          else
+            echo "Nenhum perfil encontrado com nome contendo agendalogo"
+          fi
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_P8: ${{ secrets.APPSTORE_P8 }}
