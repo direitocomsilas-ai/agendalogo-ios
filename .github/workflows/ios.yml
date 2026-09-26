@@ -219,7 +219,7 @@ jobs:
                           self.authController = controller
                           controller.delegate = self
                           controller.presentationContextProvider = self
-                          controller.perform()
+                          controller.performRequests()
                       }
                   }
 
