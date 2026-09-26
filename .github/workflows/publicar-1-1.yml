@@ -34,7 +34,7 @@ jobs:
 
           if [ -z "$NEWID" ]; then
             echo "=== 2. Criando versao 1.1 ==="
-            RELTYPE=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/versoes.json")); v=(d["data"]||[]).find{|x| x.dig("attributes","versionString")=="1.0"}; puts (v && v.dig("attributes","releaseType")) ? v["attributes"]["releaseType"] : "AFTER_APPROVAL"')
+            RELTYPE=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/versoes.json")); v=(d["data"]||[]).find{|x| x.dig("attributes","versionString")=="1.0"}; puts (v && v.dig("attributes","releaseType")) ? v["attributes"]["releaseType"] : "MANUAL"')
             echo "releaseType: $RELTYPE"
             api -X POST "https://api.appstoreconnect.apple.com/v1/appStoreVersions" \
               -d "{\"data\":{\"type\":\"appStoreVersions\",\"attributes\":{\"platform\":\"IOS\",\"versionString\":\"1.1\",\"releaseType\":\"$RELTYPE\"},\"relationships\":{\"app\":{\"data\":{\"type\":\"apps\",\"id\":\"$APP\"}}}}}" > /tmp/nova.json
@@ -49,9 +49,10 @@ jobs:
           fi
           echo "versao 1.1 ID: $NEWID"
 
-          echo "=== 3. Copiando informacoes de revisao da 1.0 ==="
+          echo "=== 3. Copiando informacoes de revisao da 1.0 (se possivel) ==="
           if [ -n "$OLDID" ]; then
             api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$OLDID/appReviewDetail" > /tmp/oldreview.json
+            head -c 200 /tmp/oldreview.json; echo ""
             export NEWID
             ruby -rjson -e '
               begin
@@ -64,7 +65,7 @@ jobs:
                 puts "sem review detail na 1.0: " + e.message
                 File.write("/tmp/reviewbody.json","")
               end' 2>/dev/null || true
-            if [ -s /tmp/reviewbody.json ]; then
+            if ruby -rjson -e 'd=JSON.parse(File.read("/tmp/reviewbody.json")); exit((d.dig("data","attributes")||{}).empty? ? 1 : 0)' 2>/dev/null; then
               api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID/appReviewDetail" > /tmp/newreview.json
               NEWRD=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/newreview.json")); puts d.dig("data","id") || ""')
               if [ -n "$NEWRD" ]; then
@@ -72,6 +73,8 @@ jobs:
               else
                 api -X POST "https://api.appstoreconnect.apple.com/v1/appReviewDetails" -d @/tmp/reviewbody.json | head -c 300; echo ""
               fi
+            else
+              echo "sem review info para copiar (preencher manualmente no App Store Connect se necessario)"
             fi
           fi
 
@@ -101,24 +104,45 @@ jobs:
             done
           fi
 
-          echo "=== 4. Aguardando o build 1.1 processar (ate 40 min) ==="
+          echo "=== 4. Localizando o build da versao 1.1 (ate 40 min) ==="
           BUILDID=""
+          STATE=""
           for i in $(seq 1 40); do
-            api "https://api.appstoreconnect.apple.com/v1/builds?filter%5Bapp%5D=$APP&include=preReleaseVersion&limit=15" > /tmp/builds.json
-            INFO=$(ruby -rjson -e '
-              d=JSON.parse(File.read("/tmp/builds.json"))
-              pre={}
-              (d["included"]||[]).each{|p| pre[p["id"]]=p.dig("attributes","versionString").to_s if p["type"]=="preReleaseVersions"}
-              b=(d["data"]||[]).find{|x| pre[x.dig("relationships","preReleaseVersion","data","id").to_s] =~ /^1\.1/ }
-              puts b ? b["id"] + "|" + (b.dig("attributes","processed") ? "READY" : b.dig("attributes","processingState").to_s) : ""' 2>/dev/null || echo "")
-            BUILDID=$(echo "$INFO" | cut -d"|" -f1)
-            STATE=$(echo "$INFO" | cut -d"|" -f2)
-            echo "tentativa $i: build=${BUILDID:-nenhum} estado=$STATE"
-            if [ -n "$BUILDID" ] && [ "$STATE" = "READY" ]; then break; fi
+            api "https://api.appstoreconnect.apple.com/v1/builds?filter%5Bapp%5D=$APP&filter%5Bexpired%5D=false&limit=10" > /tmp/builds.json
+            IDS=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/builds.json")); puts (d["data"]||[]).map{|b| b["id"] + "," + b.dig("attributes","version").to_s + "," + b.dig("attributes","processingState").to_s}.join(" ")' 2>/dev/null || echo "")
+            ANYMV=0
+            for trio in $IDS; do
+              BID=$(echo "$trio" | cut -d, -f1); BNUM=$(echo "$trio" | cut -d, -f2); BST=$(echo "$trio" | cut -d, -f3)
+              [ "$BST" != "VALID" ] && continue
+              api "https://api.appstoreconnect.apple.com/v1/builds/$BID/preReleaseVersion" > /tmp/prv.json
+              MV=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/prv.json")); puts d.dig("data","attributes","versionString").to_s' 2>/dev/null || echo "")
+              echo "build $BID (num $BNUM, $BST) -> versao marketing: ${MV:-desconhecida}"
+              if [ -n "$MV" ]; then ANYMV=1; fi
+              case "$MV" in
+                1.1*) BUILDID=$BID; STATE=READY; break ;;
+              esac
+            done
+            if [ -n "$BUILDID" ]; then break; fi
+            if [ -z "$IDS" ]; then
+              echo "tentativa $i: nenhum build listado"
+            elif [ "$ANYMV" = "0" ]; then
+              NOVER=$(ruby -rjson -e '
+                d=JSON.parse(File.read("/tmp/builds.json"))
+                cands=(d["data"]||[]).select{|b| b.dig("attributes","processingState")=="VALID"}
+                exit 1 if cands.empty?
+                best=cands.max_by{|b| b.dig("attributes","version").to_i}
+                puts best["id"]' 2>/dev/null || echo "")
+              if [ -n "$NOVER" ]; then
+                echo "AVISO: usando fallback (maior build VALIDO): $NOVER"
+                BUILDID=$NOVER; STATE=READY; break
+              fi
+              echo "tentativa $i: builds existem mas nenhum VALIDO ainda"
+            else
+              echo "tentativa $i: build 1.1 ainda nao disponivel"
+            fi
             sleep 60
           done
           if [ -z "$BUILDID" ]; then echo "ERRO: build 1.1 nao encontrado"; exit 1; fi
-          if [ "$STATE" != "READY" ]; then echo "ERRO: build ainda processando apos 40 min"; exit 1; fi
 
           echo "=== 5. Vinculando build $BUILDID a versao 1.1 ==="
           api -X PATCH "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID" \
@@ -127,7 +151,7 @@ jobs:
           echo "=== 6. Submetendo para revisao ==="
           api -X POST "https://api.appstoreconnect.apple.com/v1/appSubmissions" \
             -d "{\"data\":{\"type\":\"appSubmissions\",\"relationships\":{\"appStoreVersion\":{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\"}}}}}" > /tmp/sub.json
-          head -c 500 /tmp/sub.json; echo ""
+          head -c 600 /tmp/sub.json; echo ""
           if grep -q '"errors"' /tmp/sub.json; then
             if grep -qi 'already\|STATE\|WAITING' /tmp/sub.json; then
               echo "versao ja esta em revisao - OK"
