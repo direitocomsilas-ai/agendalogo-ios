@@ -152,15 +152,33 @@ jobs:
           api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID/appReviewDetail" > /tmp/rd.json
           head -c 400 /tmp/rd.json; echo ""
 
-          echo "=== 6. Submetendo para revisao (novo fluxo reviewSubmissions) ==="
-          api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissions" \
-            -d "{\"data\":{\"type\":\"reviewSubmissions\",\"relationships\":{\"app\":{\"data\":{\"type\":\"apps\",\"id\":\"$APP\"}}}}}" > /tmp/rs.json
-          head -c 400 /tmp/rs.json; echo ""
-          RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rs.json")); puts d.dig("data","id") || ""' 2>/dev/null || echo "")
+          echo "=== 6. Preenchendo Novidades (whatsNew) da versao 1.1 ==="
+          api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID/appStoreVersionLocalizations?limit=5" > /tmp/locs.json
+          LOCID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/locs.json")); l=(d["data"]||[]).find{|x| x.dig("attributes","locale")=="pt-BR"} || (d["data"]||[]).first; puts l ? l["id"] : ""')
+          if [ -z "$LOCID" ]; then echo "ERRO: localizacao nao encontrada"; exit 1; fi
+          echo "localizacao: $LOCID"
+          export LOCID
+          ruby -rjson -e '
+            wn = "Novidades desta vers\u00e3o:\n" +
+              "\u2022 Entrar com Apple: acesse sua conta com seu iCloud, com total privacidade\n" +
+              "\u2022 Corre\u00e7\u00e3o do erro que ocorria ao tirar fotos dentro do app\n" +
+              "\u2022 Melhorias de estabilidade e desempenho\n" +
+              "\u2022 Ajustes de interface para uma experi\u00eancia mais fluida"
+            File.write("/tmp/wn.json", {data:{type:"appStoreVersionLocalizations", id:ENV["LOCID"], attributes:{whatsNew:wn}}}.to_json)'
+          api -X PATCH "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/$LOCID" -d @/tmp/wn.json > /tmp/wnresp.json
+          head -c 300 /tmp/wnresp.json; echo ""
+          if grep -q '"errors"' /tmp/wnresp.json; then echo "ERRO ao definir whatsNew"; exit 1; fi
+          echo "whatsNew definido"
+
+          echo "=== 7. Submetendo para revisao (reviewSubmissions) ==="
+          api "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?filter%5Bapp%5D=$APP&limit=5" > /tmp/rsl.json
+          RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rsl.json")); v=(d["data"]||[]).find{|x| ["READY_FOR_REVIEW","UNCOMMITTED"].include?(x.dig("attributes","state"))}; puts v ? v["id"] : ""' 2>/dev/null || echo "")
           if [ -z "$RSID" ]; then
-            echo "buscando reviewSubmission existente em rascunho..."
-            api "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?filter%5Bapp%5D=$APP&limit=5" > /tmp/rsl.json
-            RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rsl.json")); v=(d["data"]||[]).find{|x| x.dig("attributes","state")=="UNCOMMITTED"}; puts v ? v["id"] : ""' 2>/dev/null || echo "")
+            echo "criando nova reviewSubmission..."
+            api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissions" \
+              -d "{\"data\":{\"type\":\"reviewSubmissions\",\"relationships\":{\"app\":{\"data\":{\"type\":\"apps\",\"id\":\"$APP\"}}}}}" > /tmp/rs.json
+            head -c 300 /tmp/rs.json; echo ""
+            RSID=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/rs.json")); puts d.dig("data","id") || ""' 2>/dev/null || echo "")
           fi
           if [ -z "$RSID" ]; then echo "ERRO: nao consegui criar/obter reviewSubmission"; exit 1; fi
           echo "reviewSubmission: $RSID"
@@ -168,21 +186,33 @@ jobs:
           echo "--- adicionando item (versao 1.1) ---"
           api -X POST "https://api.appstoreconnect.apple.com/v1/reviewSubmissionItems" \
             -d "{\"data\":{\"type\":\"reviewSubmissionItems\",\"relationships\":{\"reviewSubmission\":{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"$RSID\"}},\"appStoreVersion\":{\"data\":{\"type\":\"appStoreVersions\",\"id\":\"$NEWID\"}}}}}" > /tmp/rsi.json
-          head -c 400 /tmp/rsi.json; echo ""
+          head -c 500 /tmp/rsi.json; echo ""
           if grep -q '"errors"' /tmp/rsi.json; then
             if ! grep -qi 'already\|EXIST\|409' /tmp/rsi.json; then
-              echo "AVISO: item nao adicionado (ver resposta acima)"
+              echo "ERRO: item nao adicionado (ver resposta acima)"
+              exit 1
             fi
           fi
 
-          echo "--- enviando para a fila de revisao ---"
+          echo "--- aguardando estado da versao ficar READY_FOR_REVIEW ---"
+          for t in $(seq 1 8); do
+            api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID" > /tmp/ver.json
+            VSTATE=$(ruby -rjson -e 'd=JSON.parse(File.read("/tmp/ver.json")); puts d.dig("attributes","appVersionState").to_s' 2>/dev/null || echo "")
+            echo "estado da versao: $VSTATE"
+            case "$VSTATE" in READY_FOR_REVIEW|WAITING_FOR_REVIEW) break;; esac
+            sleep 15
+          done
+
+          echo "--- enviando para a fila de revisao (submitted: true) ---"
           api -X PATCH "https://api.appstoreconnect.apple.com/v1/reviewSubmissions/$RSID" \
-            -d "{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"$RSID\",\"attributes\":{\"state\":\"WAITING_FOR_REVIEW\"}}}" > /tmp/rss.json
+            -d "{\"data\":{\"type\":\"reviewSubmissions\",\"id\":\"$RSID\",\"attributes\":{\"submitted\":true}}}" > /tmp/rss.json
           head -c 700 /tmp/rss.json; echo ""
           if grep -q '"errors"' /tmp/rss.json; then
             echo "ERRO na submissao (ver resposta acima)"
             exit 1
           fi
+          api "https://api.appstoreconnect.apple.com/v1/appStoreVersions/$NEWID" > /tmp/verfim.json
+          ruby -rjson -e 'd=JSON.parse(File.read("/tmp/verfim.json")); puts "ESTADO FINAL DA VERSAO 1.1: " + d.dig("attributes","appVersionState").to_s + " / " + d.dig("attributes","appStoreState").to_s'
           echo "=== FEITO ==="
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
