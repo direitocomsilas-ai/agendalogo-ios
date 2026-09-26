@@ -63,6 +63,10 @@ jobs:
                   PRODUCT_BUNDLE_IDENTIFIER: com.agendalogo.app
                   TARGETED_DEVICE_FAMILY: "1"
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+              entitlements:
+                path: AgendaLogo/AgendaLogo.entitlements
+                properties:
+                  com.apple.developer.authentication.services.appleid.applesignin: true
               info:
                 path: AgendaLogo/Info.plist
                 properties:
@@ -126,9 +130,9 @@ jobs:
                       Image(systemName: "wifi.slash")
                           .font(.system(size: 56, weight: .light))
                           .foregroundColor(Color(red: 0.02, green: 0.59, blue: 0.41))
-                      Text("Sem conexÃ£o")
+                      Text("Sem conexão")
                           .font(.title2.bold())
-                      Text("Verifique sua internet para usar o Agenda Logo.\nSua agenda e seus clientes voltam a aparecer quando a conexÃ£o voltar.")
+                      Text("Verifique sua internet para usar o Agenda Logo.\nSua agenda e seus clientes voltam a aparecer quando a conexão voltar.")
                           .font(.subheadline)
                           .foregroundColor(.gray)
                           .multilineTextAlignment(.center)
@@ -151,12 +155,13 @@ jobs:
           cat > app/AgendaLogo/WebView.swift <<'FIMSW3'
           import SwiftUI
           import WebKit
+          import AuthenticationServices
 
           final class WebViewModel: ObservableObject {
               @Published var isLoading = false
               @Published var isOffline = false
               weak var webView: WKWebView?
-              let startURL = URL(string: "https://agendez-estetica-pobno0o.verdent.app/entrar")!
+              let startURL = URL(string: "https://agendalogo.com/entrar")!
 
               func retry() {
                   isOffline = false
@@ -172,6 +177,8 @@ jobs:
                   config.allowsInlineMediaPlayback = true
                   let viewportScript = WKUserScript(source: "var meta=document.createElement('meta');meta.name='viewport';meta.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';document.head.appendChild(meta);", injectionTime: .atDocumentEnd, forMainFrameOnly: true)
                   config.userContentController.addUserScript(viewportScript)
+                  // Ponte JS -> nativo para o Sign in with Apple do sistema (iCloud)
+                  config.userContentController.add(context.coordinator, name: "appleSignIn")
                   let web = WKWebView(frame: .zero, configuration: config)
                   let defaultUA = web.value(forKey: "userAgent") as? String ?? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
                   web.customUserAgent = defaultUA + " AgendaLogoApp/1"
@@ -192,11 +199,37 @@ jobs:
                   Coordinator(model)
               }
 
-              final class Coordinator: NSObject, WKNavigationDelegate {
+              final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                   private let model: WebViewModel
+                  private var authController: ASAuthorizationController?
 
                   init(_ model: WebViewModel) {
                       self.model = model
+                  }
+
+                  // MARK: - Ponte do Sign in with Apple
+
+                  func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+                      guard message.name == "appleSignIn" else { return }
+                      DispatchQueue.main.async {
+                          let request = ASAuthorizationAppleIDProvider().createRequest()
+                          request.requestedScopes = [.fullName, .email]
+                          let controller = ASAuthorizationController(authorizationRequests: [request])
+                          self.authController = controller
+                          controller.delegate = self
+                          controller.presentationContextProvider = self
+                          controller.perform()
+                      }
+                  }
+
+                  private func reply(idToken: String = "", firstName: String = "", familyName: String = "", error: String = "") {
+                      let obj: [String: Any] = ["idToken": idToken, "firstName": firstName, "familyName": familyName, "error": error]
+                      guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                            let json = String(data: data, encoding: .utf8) else { return }
+                      self.model.webView?.evaluateJavaScript(
+                          "window.__appleNativeSignInResult && window.__appleNativeSignInResult(\(json))",
+                          completionHandler: nil
+                      )
                   }
 
                   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -227,15 +260,15 @@ jobs:
                       }
                       let scheme = url.scheme?.lowercased() ?? ""
 
-                      // LigaÃ§Ãµes, e-mails, WhatsApp e SMS abrem no app correspondente do iPhone
+                      // Ligações, e-mails, WhatsApp e SMS abrem no app correspondente do iPhone
                       if ["tel", "mailto", "whatsapp", "sms", "itms-apps"].contains(scheme) {
                           UIApplication.shared.open(url)
                           decisionHandler(.cancel)
                           return
                       }
 
-                      // Login com Google nÃ£o funciona dentro do WebView (Google bloqueia):
-                      // abre no Safari do prÃ³prio iPhone
+                      // Login com Google não funciona dentro do WebView (Google bloqueia):
+                      // abre no Safari do próprio iPhone
                       let host = url.host?.lowercased() ?? ""
                       if host.contains("accounts.google.com") || host.contains("appleid.apple.com") {
                           UIApplication.shared.open(url)
@@ -251,6 +284,33 @@ jobs:
                                for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
                       webView.load(navigationAction.request)
                       return nil
+                  }
+              }
+          }
+
+          // MARK: - Resultado do Sign in with Apple
+
+          extension WebView.Coordinator: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+
+              func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+                  self.model.webView?.window ?? ASPresentationAnchor()
+              }
+
+              func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+                  guard let cred = authorization.credential as? ASAuthorizationAppleIDCredential,
+                        let tokenData = cred.identityToken,
+                        let idToken = String(data: tokenData, encoding: .utf8) else {
+                      self.reply(error: "Credenciais da Apple não recebidas.")
+                      return
+                  }
+                  self.reply(idToken: idToken, firstName: cred.fullName?.givenName ?? "", familyName: cred.fullName?.familyName ?? "")
+              }
+
+              func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+                  if let authError = error as? ASAuthorizationError, authError.code == .canceled {
+                      self.reply(error: "Login com a Apple cancelado.")
+                  } else {
+                      self.reply(error: error.localizedDescription)
                   }
               }
           }
@@ -302,6 +362,7 @@ jobs:
               match(
                 type: "appstore",
                 readonly: false,
+                force: true,
                 app_identifier: BUNDLE_ID,
                 team_id: ENV["APPLE_TEAM_ID"],
                 git_url: ENV["MATCH_GIT_URL"],
@@ -337,7 +398,7 @@ jobs:
             end
           end
           FIMFAST
-          curl -fsSL "https://agendez-estetica-pobno0o.verdent.app/icons/agendalogo-1024.png" -o app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          curl -fsSL "https://agendalogo.com/icons/agendalogo-1024.png" -o app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
           sips -g pixelWidth -g pixelHeight app/AgendaLogo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
           echo "Estrutura criada:"
           find app -type f | sort
@@ -380,6 +441,28 @@ jobs:
           echo "Verificando se o app ja consta na App Store Connect..."
           CHECK=$(curl -s "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=com.agendalogo.app" -H "Authorization: Bearer $TOKEN")
           echo "$CHECK" | head -c 400; echo
+
+      - name: Habilitar Sign in with Apple no App ID
+        run: |
+          set -e
+          TOKEN=$(ruby -rjwt -ropenssl -e '
+            key = OpenSSL::PKey::EC.new(ENV["APPSTORE_P8"])
+            now = Time.now.to_i
+            payload = { iss: ENV["APPSTORE_ISSUER_ID"], exp: now + 1200, aud: "appstoreconnect-v1" }
+            puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
+          ')
+          BID=$(curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds?filter%5Bidentifier%5D=com.agendalogo.app" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); puts d.dig("data",0,"id")' 2>/dev/null || true)
+          echo "Bundle interno: ${BID:-nao encontrado}"
+          if [ -n "$BID" ]; then
+            if curl -s "https://api.appstoreconnect.apple.com/v1/bundleIds/$BID/capabilities" -H "Authorization: Bearer $TOKEN" | grep -q SIGN_IN_WITH_APPLE; then
+              echo "Sign in with Apple ja habilitado."
+            else
+              echo "Habilitando Sign in with Apple..."
+              curl -s -X POST "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities" \
+                -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+                -d "{\"data\":{\"type\":\"bundleIdCapabilities\",\"attributes\":{\"capabilityType\":\"SIGN_IN_WITH_APPLE\"},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}}}}}" | head -c 400; echo
+            fi
+          fi
 
       - name: Gerar projeto Xcode
         run: xcodegen generate
