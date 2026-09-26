@@ -5,7 +5,7 @@ jobs:
   diag:
     runs-on: macos-latest
     steps:
-      - name: Verdade absoluta v2
+      - name: Decodificar entitlements dos perfis
         run: |
           set -e
           TOKEN=$(ruby -rjwt -ropenssl -e '
@@ -15,33 +15,28 @@ jobs:
             puts JWT.encode(payload, key, "ES256", { kid: ENV["APPSTORE_KEY_ID"], typ: "JWT" })
           ')
           BID=86KCS2L573
-          echo "=== B. capability direto por id ==="
-          curl -s "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/${BID}_APPLE_ID_AUTH" -H "Authorization: Bearer $TOKEN"; echo ""
-          echo "=== C. perfil atual do match: entitlements ==="
-          PID2=$(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); p=(d["data"]||[]).find{|x| x.dig("attributes","name").to_s.include?("agendalogo")}; puts p ? p["id"] : ""')
-          echo "perfil: $PID2"
-          curl -s "https://api.appstoreconnect.apple.com/v1/profiles/$PID2/profileContent" -H "Authorization: Bearer $TOKEN" -o /tmp/match.mobileprovision
+          echo "=== 1. Perfil do match: entitlements ==="
+          PID2=$(curl -s "https://api.appstoreconnect.apple.com/v1/profiles?limit=50" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); p=(d["data"]||[]).find{|x| x.dig("attributes","name").to_s.include?("match AppStore")}; puts p ? p["id"] : ""')
+          echo "perfil do match: $PID2"
+          curl -s "https://api.appstoreconnect.apple.com/v1/profiles/$PID2" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); require "base64"; File.binwrite("/tmp/match.mobileprovision", Base64.decode64(d.dig("data","attributes","profileContent")))'
           ls -la /tmp/match.mobileprovision
-          head -c 200 /tmp/match.mobileprovision | strings | head -5
-          security cms -D -i /tmp/match.mobileprovision > /tmp/match.plist || echo "cms falhou"
-          echo "--- Entitlements do perfil do match ---"
-          plutil -extract Entitlements xml1 -o - /tmp/match.plist || echo "sem entitlements?"
-          echo "=== D. perfil de teste novo (verdade da capability) ==="
+          security cms -D -i /tmp/match.mobileprovision > /tmp/match.plist
+          plutil -extract Entitlements xml1 -o - /tmp/match.plist
+          echo "=== 2. Perfil NOVO de teste: entitlements (verdade da capability) ==="
           CERT=$(curl -s "https://api.appstoreconnect.apple.com/v1/certificates?limit=10" -H "Authorization: Bearer $TOKEN" | ruby -rjson -e 'd=JSON.parse(STDIN.read); c=(d["data"]||[]).find{|x| x.dig("attributes","certificateType")=="DISTRIBUTION"} || (d["data"]||[]).first; puts c ? c["id"] : ""')
-          echo "certificado: $CERT"
           RES=$(curl -s -X POST "https://api.appstoreconnect.apple.com/v1/profiles" \
             -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-            -d "{\"data\":{\"type\":\"profiles\",\"attributes\":{\"name\":\"diag-temp-agendalogo\",\"profileType\":\"IOS_APP_STORE\"},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}},\"certificates\":{\"data\":[{\"type\":\"certificates\",\"id\":\"$CERT\"}]}}}}")
-          echo "$RES" | head -c 400; echo ""
-          TPID=$(echo "$RES" | ruby -rjson -e 'd=JSON.parse(STDIN.read); puts d.dig("data","id") || ""')
-          if [ -n "$TPID" ]; then
-            sleep 5
-            curl -s "https://api.appstoreconnect.apple.com/v1/profiles/$TPID/profileContent" -H "Authorization: Bearer $TOKEN" -o /tmp/temp.mobileprovision
-            security cms -D -i /tmp/temp.mobileprovision > /tmp/temp.plist || echo "cms falhou"
-            echo "--- Entitlements do perfil NOVO ---"
-            plutil -extract Entitlements xml1 -o - /tmp/temp.plist || echo "sem entitlements?"
-            curl -s -X DELETE "https://api.appstoreconnect.apple.com/v1/profiles/$TPID" -H "Authorization: Bearer $TOKEN" -o /dev/null -w "cleanup:%{http_code}\n"
-          fi
+            -d "{\"data\":{\"type\":\"profiles\",\"attributes\":{\"name\":\"diag-temp2-agendalogo\",\"profileType\":\"IOS_APP_STORE\"},\"relationships\":{\"bundleId\":{\"data\":{\"type\":\"bundleIds\",\"id\":\"$BID\"}},\"certificates\":{\"data\":[{\"type\":\"certificates\",\"id\":\"$CERT\"}]}}}}")
+          echo "$RES" | ruby -rjson -e 'd=JSON.parse(STDIN.read); require "base64"; File.binwrite("/tmp/temp.mobileprovision", Base64.decode64(d.dig("data","attributes","profileContent"))); puts "TPID=" + (d.dig("data","id") || "")' > /tmp/tpid.txt
+          cat /tmp/tpid.txt
+          TPID=$(grep -o "TPID=.*" /tmp/tpid.txt | cut -d= -f2)
+          ls -la /tmp/temp.mobileprovision
+          security cms -D -i /tmp/temp.mobileprovision > /tmp/temp.plist
+          echo "--- Entitlements do perfil NOVO ---"
+          plutil -extract Entitlements xml1 -o - /tmp/temp.plist
+          echo "=== 3. Tem applesignin? ==="
+          if grep -q applesignin /tmp/temp.plist; then echo "SIM - capability ativa, problema em outro lugar"; else echo "NAO - capability nao esta ativa de verdade"; fi
+          curl -s -X DELETE "https://api.appstoreconnect.apple.com/v1/profiles/$TPID" -H "Authorization: Bearer $TOKEN" -o /dev/null -w "cleanup:%{http_code}\n"
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
