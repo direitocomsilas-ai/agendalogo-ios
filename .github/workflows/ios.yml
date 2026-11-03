@@ -166,7 +166,35 @@ jobs:
 
               func retry() {
                   isOffline = false
-                  webView?.reload()
+                  // Se a primeira carga falhou, o WebView ainda não tem URL e
+                  // reload() não faz nada: carrega o endereço inicial de novo.
+                  guard let web = webView else { return }
+                  if web.url == nil {
+                      web.load(URLRequest(url: startURL))
+                  } else {
+                      web.reload()
+                  }
+              }
+
+              // Só é "sem conexão" quando a falha é de rede de verdade. Navegações
+              // canceladas (recarga automática do site, toque rápido em outro link,
+              // link aberto fora do app) também chegam como erro e não devem
+              // mostrar a tela de offline.
+              static func isNetworkError(_ error: Error) -> Bool {
+                  let ns = error as NSError
+                  guard ns.domain == NSURLErrorDomain else { return false }
+                  let codes: [Int] = [
+                      NSURLErrorNotConnectedToInternet,
+                      NSURLErrorNetworkConnectionLost,
+                      NSURLErrorTimedOut,
+                      NSURLErrorCannotFindHost,
+                      NSURLErrorCannotConnectToHost,
+                      NSURLErrorDNSLookupFailed,
+                      NSURLErrorInternationalRoamingOff,
+                      NSURLErrorDataNotAllowed,
+                      NSURLErrorSecureConnectionFailed,
+                  ]
+                  return codes.contains(ns.code)
               }
           }
 
@@ -247,10 +275,25 @@ jobs:
                   }
 
                   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+                      handleFailure(error)
+                  }
+
+                  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+                      handleFailure(error)
+                  }
+
+                  private func handleFailure(_ error: Error) {
+                      let offline = WebViewModel.isNetworkError(error)
                       DispatchQueue.main.async {
                           self.model.isLoading = false
-                          self.model.isOffline = true
+                          if offline { self.model.isOffline = true }
                       }
+                  }
+
+                  // O iOS pode encerrar o processo do WebView em segundo plano
+                  // (tela branca ao voltar ao app): recarrega sozinho.
+                  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+                      DispatchQueue.main.async { self.model.retry() }
                   }
 
                   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
